@@ -1,0 +1,399 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#101418">
+<title>QR 파일 수신기</title>
+<style>
+/* 레이아웃: 위쪽 카메라 화면, 아래쪽 진행 격자 + 저장 버튼 */
+:root{
+  --bg:#101418; --panel:#1a2027; --line:#2b333d; --fg:#e8edf2; --muted:#8a96a3;
+  --ok:#3ccf8e; --warn:#f2b84b; --bad:#ef6b6b; --accent:#5aa9ff;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --sans:-apple-system,"Apple SD Gothic Neo","Malgun Gothic","Noto Sans KR",system-ui,sans-serif;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--fg);font:15px/1.5 var(--sans);
+  padding:env(safe-area-inset-top,0) max(12px,env(safe-area-inset-right,0px)) env(safe-area-inset-bottom,0) max(12px,env(safe-area-inset-left,0px));
+  display:flex;flex-direction:column;gap:10px}
+header{display:flex;align-items:baseline;justify-content:space-between;padding-top:10px}
+h1{font-size:17px;margin:0;font-weight:700}
+#status{font-size:13px;color:var(--muted)}
+.cam{position:relative;background:#000;border-radius:12px;overflow:hidden;aspect-ratio:1/1;max-height:52vh;width:100%}
+video{width:100%;height:100%;object-fit:cover;display:block}
+.frame{position:absolute;inset:12%;border:2px solid rgba(255,255,255,.35);border-radius:10px;pointer-events:none;transition:border-color .15s}
+.frame.hit{border-color:var(--ok)}
+.cam .msg{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:20px;color:var(--muted)}
+.info{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px;display:flex;flex-direction:column;gap:10px}
+.row{display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap}
+#fname{font-weight:600;word-break:break-all;min-width:0}
+#count{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.bar{height:6px;background:var(--line);border-radius:3px;overflow:hidden}
+.bar>i{display:block;height:100%;width:0;background:var(--ok);transition:width .2s}
+#grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(30px,1fr));gap:4px;max-height:22vh;overflow:auto}
+#grid b{font:11px var(--mono);text-align:center;padding:5px 0;border-radius:4px;background:var(--line);color:var(--muted);font-weight:400}
+#grid b.on{background:var(--ok);color:#06251a}
+#grid b.new{outline:2px solid #fff}
+#missing{font-size:13px;color:var(--warn);word-break:break-all}
+.btns{display:flex;gap:8px;flex-wrap:wrap}
+button{flex:1 1 auto;font:600 15px var(--sans);padding:12px 14px;border-radius:10px;border:1px solid var(--line);background:var(--panel);color:var(--fg)}
+button.primary{background:var(--accent);border-color:var(--accent);color:#04121f}
+button:disabled{opacity:.4}
+button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.filepick{display:block;position:relative;text-align:center;font-weight:600;padding:12px;border-radius:10px;border:1px dashed var(--accent);color:var(--accent)}
+.filepick input{position:absolute;inset:0;opacity:0;width:100%;height:100%}
+.filepick:focus-within{outline:2px solid var(--accent);outline-offset:2px}
+.hint{font-size:12px;color:var(--muted)}
+#pwBox{display:flex;gap:8px}
+#pwBox input{flex:1;min-width:0;font:15px var(--sans);padding:12px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--fg)}
+#pwBox button{flex:0 0 auto}
+#log{font-size:13px;min-height:1.5em}
+#log.err{color:var(--bad)} #log.ok{color:var(--ok)}
+</style>
+</head>
+<body>
+<header><h1>QR 파일 수신기</h1><span id="status">준비 중</span></header>
+
+<div class="cam">
+  <video id="v" playsinline muted></video>
+  <div class="frame" id="frame"></div>
+  <div class="msg" id="camMsg">‘카메라 시작’을 누르세요</div>
+</div>
+
+<section class="info">
+  <div class="row"><span id="fname">아직 스캔한 QR 없음</span><span id="count">0 / 0</span></div>
+  <div class="bar"><i id="barFill"></i></div>
+  <div id="grid"></div>
+  <div id="missing"></div>
+  <form id="pwBox" hidden>
+    <input type="password" id="pw" placeholder="암호 입력" autocomplete="off">
+    <button type="submit" class="primary">해독</button>
+  </form>
+  <div id="log"></div>
+  <div class="btns">
+    <button id="btnCam" class="primary">카메라 시작</button>
+    <button id="btnSave" disabled>파일 저장</button>
+    <button id="btnShare" disabled hidden>공유/내보내기</button>
+    <button id="btnReset">초기화</button>
+  </div>
+  <label class="filepick">
+    <input type="file" id="pick" accept="video/*,image/*" multiple>
+    <span>동영상/사진에서 읽기</span>
+  </label>
+  <div class="hint">카메라 권한 없이도 됩니다. 폰 기본 카메라 앱으로 PC의 viewer.html을 한두 바퀴 동영상 촬영한 뒤 여기서 고르세요.</div>
+</section>
+
+<canvas id="c" hidden></canvas>
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const v=$('v'), cv=$('c'), ctx=cv.getContext('2d',{willReadFrequently:true});
+const KEY='qf1_state';
+
+// 상태: 현재 받고 있는 파일 정보 + 조각들
+let st = load() || {meta:null, parts:{}};
+if(st.meta && !st.meta.id) st.meta.id=st.meta.sha;  // 이전 버전 진행분 호환
+let fileBlob=null, scanning=false, detector=null, lastNew=0;
+
+function load(){ try{return JSON.parse(localStorage.getItem(KEY));}catch(e){return null;} }
+function save(){ try{localStorage.setItem(KEY,JSON.stringify(st));}catch(e){} }
+
+function log(t,cls=''){ const l=$('log'); l.textContent=t; l.className=cls; }
+
+function render(newIdx){
+  const m=st.meta;
+  if(!m){ $('fname').textContent='아직 스캔한 QR 없음'; $('count').textContent='0 / 0';
+    $('grid').innerHTML=''; $('missing').textContent=''; $('barFill').style.width='0'; return; }
+  const got=Object.keys(st.parts).length;
+  $('fname').textContent=m.name;
+  $('count').textContent=got+' / '+m.total;
+  $('barFill').style.width=(got/m.total*100)+'%';
+  const g=$('grid');
+  if(g.children.length!==m.total){
+    g.innerHTML='';
+    for(let i=1;i<=m.total;i++){ const b=document.createElement('b'); b.textContent=i; g.appendChild(b); }
+  }
+  for(let i=1;i<=m.total;i++){
+    const b=g.children[i-1]; b.classList.toggle('on',!!st.parts[i]); b.classList.toggle('new',i===newIdx);
+  }
+  const miss=[]; for(let i=1;i<=m.total;i++) if(!st.parts[i]) miss.push(i);
+  $('missing').textContent = miss.length ? '남은 번호: '+(miss.length>40?miss.slice(0,40).join(', ')+' …':miss.join(', ')) : '';
+}
+
+// QR 한 장 처리. 반환값: true = 새 조각
+function handle(text){
+  if(!text) return false;
+  const p=text.split('|');
+  let idx, total, chunk, meta;
+  if(p[0]==='QF1' && p.length>=7){
+    idx=+p[1]; total=+p[2]; chunk=p.slice(6).join('|');
+    meta={enc:false,total,flag:p[3],sha:p[4],name:p[5],id:p[4]};
+  }else if(p[0]==='QF2' && p.length>=5){
+    idx=+p[1]; total=+p[2]; chunk=p[4];
+    meta={enc:true,total,salt:p[3],name:'암호화된 파일',id:p[3]};
+  }else if(text.startsWith('QF3:')){
+    // QF3:순번:전체:모드(E/P):파일ID:base45데이터*   (데이터 안에도 ':'가 있을 수 있어 앞 5칸만 자름)
+    const f=[]; let pos=0;
+    for(let k=0;k<5;k++){ const q=text.indexOf(':',pos); if(q<0) return false; f.push(text.slice(pos,q)); pos=q+1; }
+    if(!text.endsWith('*')) return false;
+    idx=+f[1]; total=+f[2]; chunk=text.slice(pos,-1);
+    const enc=f[3]==='E';
+    meta={fmt:3,enc,total,salt:f[4],id:f[4],name:enc?'암호화된 파일':'파일'};
+  }else return false;
+  if(!idx||!total) return false;
+  if(st.meta && st.meta.id!==meta.id){
+    log('다른 파일의 QR입니다. 새로 받으려면 초기화를 누르세요.','err'); return false;
+  }
+  if(!st.meta){ st.meta=meta; fileBlob=null; }
+  if(st.parts[idx]) return false;
+  st.parts[idx]=chunk; save();
+  if(navigator.vibrate) navigator.vibrate(40);
+  render(idx);
+  log(idx+'번 받음','ok');
+  if(Object.keys(st.parts).length===st.meta.total) assemble();
+  return true;
+}
+
+const PBKDF2_ITER=300000; // file_to_qr.py 와 같아야 함
+const B45='0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:';
+function b45decode(s){
+  const out=[];
+  for(let i=0;i<s.length;i+=3){
+    const v=[...s.slice(i,i+3)].map(c=>{ const k=B45.indexOf(c); if(k<0) throw new Error('잘못된 데이터'); return k; });
+    if(v.length===3){ const n=v[0]+v[1]*45+v[2]*2025; if(n>65535) throw new Error('잘못된 데이터'); out.push(n>>8,n&255); }
+    else if(v.length===2){ out.push(v[0]+v[1]*45); }
+    else throw new Error('잘못된 데이터');
+  }
+  return Uint8Array.from(out);
+}
+const CRCT=new Uint32Array(256);
+for(let n=0;n<256;n++){ let c=n; for(let k=0;k<8;k++) c=c&1?0xEDB88320^(c>>>1):c>>>1; CRCT[n]=c>>>0; }
+function crc32(b){ let c=0xFFFFFFFF; for(const x of b) c=CRCT[(c^x)&255]^(c>>>8); return (c^0xFFFFFFFF)>>>0; }
+async function inflate(bin){
+  const ds=new Blob([bin]).stream().pipeThrough(new DecompressionStream('deflate'));
+  return new Uint8Array(await new Response(ds).arrayBuffer());
+}
+async function decrypt(bin,pw){
+  const salt=Uint8Array.from(st.meta.salt.match(/../g),h=>parseInt(h,16));
+  const base=await crypto.subtle.importKey('raw',new TextEncoder().encode(pw),'PBKDF2',false,['deriveKey']);
+  const key=await crypto.subtle.deriveKey({name:'PBKDF2',salt,iterations:PBKDF2_ITER,hash:'SHA-256'},
+    base,{name:'AES-GCM',length:256},false,['decrypt']);
+  let plain;
+  try{ plain=new Uint8Array(await crypto.subtle.decrypt({name:'AES-GCM',iv:bin.slice(0,12)},key,bin.slice(12))); }
+  catch(e){ throw new Error('암호가 틀렸습니다'); }
+  const flag=String.fromCharCode(plain[0]);
+  const nl=(plain[1]<<8)|plain[2];
+  const name=new TextDecoder().decode(plain.slice(3,3+nl));
+  const data=plain.slice(3+nl);
+  return {name, raw: flag==='Z'?await inflate(data):data};
+}
+
+async function assemble(pw){
+  const m=st.meta;
+  if(m.enc && !pw){
+    stopCam();
+    $('pwBox').hidden=false; $('pw').focus();
+    log('모두 받았습니다. 암호를 입력하세요.','ok'); return;
+  }
+  try{
+    let bin;
+    if(m.fmt===3){
+      const ps=[]; let len=0; for(let i=1;i<=m.total;i++){ const b=b45decode(st.parts[i]); ps.push(b); len+=b.length; }
+      bin=new Uint8Array(len); let o=0; for(const b of ps){ bin.set(b,o); o+=b.length; }
+    }else{
+      let b64=''; for(let i=1;i<=m.total;i++) b64+=st.parts[i];
+      bin=Uint8Array.from(atob(b64),c=>c.charCodeAt(0));
+    }
+    let raw;
+    if(m.enc){
+      if(!crypto.subtle) throw new Error('이 주소에서는 해독 기능을 쓸 수 없습니다. https 주소나 크롬으로 열어주세요');
+      const r=await decrypt(bin,pw); raw=r.raw; m.name=r.name; $('fname').textContent=r.name;
+      $('pwBox').hidden=true; $('pw').value='';
+    }else if(m.fmt===3){
+      const plain=bin.slice(0,-4), c=((bin[bin.length-4]<<24)|(bin[bin.length-3]<<16)|(bin[bin.length-2]<<8)|bin[bin.length-1])>>>0;
+      if(crc32(plain)!==c){ log('무결성 검사 실패. 초기화 후 다시 스캔하세요.','err'); return; }
+      const nl=(plain[1]<<8)|plain[2], d=plain.slice(3+nl);
+      m.name=new TextDecoder().decode(plain.slice(3,3+nl)); $('fname').textContent=m.name;
+      raw = plain[0]===90 ? await inflate(d) : d;   // 90 = 'Z'
+    }else{
+      raw = m.flag==='Z' ? await inflate(bin) : bin;
+    }
+    if(m.fmt!==3 && !m.enc && crypto.subtle){
+      const h=await crypto.subtle.digest('SHA-256',raw);
+      const hex=[...new Uint8Array(h)].map(x=>x.toString(16).padStart(2,'0')).join('').slice(0,8);
+      if(hex!==m.sha){ log('체크섬이 맞지 않습니다. 초기화 후 다시 스캔하세요.','err'); return; }
+    }
+    fileBlob=new Blob([raw],{type:'application/octet-stream'});
+    stopCam();
+    $('btnSave').disabled=false; $('btnSave').classList.add('primary');
+    const f=new File([fileBlob],m.name);
+    if(navigator.canShare && navigator.canShare({files:[f]})){ $('btnShare').hidden=false; $('btnShare').disabled=false; }
+    log('복원 완료 · '+(raw.length/1024).toFixed(1)+' KB · 무결성 확인됨. ‘파일 저장’을 누르세요.','ok');
+    $('status').textContent='완료';
+  }catch(e){ log('복원 실패: '+e.message,'err'); }
+}
+
+function saveFile(){
+  if(!fileBlob) return;
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(fileBlob); a.download=st.meta.name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(a.href),5000);
+}
+async function shareFile(){
+  try{ await navigator.share({files:[new File([fileBlob],st.meta.name)],title:st.meta.name}); }
+  catch(e){ if(e.name!=='AbortError') log('공유 실패: '+e.message,'err'); }
+}
+
+// 카메라
+let stream=null, wake=null;
+function camHelp(e){
+  const inFrame = window.top!==window.self;
+  const n = e ? e.name : '';
+  if(!window.isSecureContext || !navigator.mediaDevices)
+    return '이 주소('+location.protocol+')에서는 카메라가 막혀 있습니다. https 주소(GitHub Pages 등)로 열거나, 아래 ‘동영상/사진에서 읽기’를 쓰세요.';
+  if(inFrame)
+    return '앱 안의 미리보기 화면에서는 카메라를 쓸 수 없습니다. 크롬/사파리에서 직접 열거나 ‘동영상/사진에서 읽기’를 쓰세요.';
+  if(n==='NotAllowedError')
+    return '카메라가 거부됐습니다. 주소창 왼쪽 자물쇠 → 권한 → 카메라 허용 후 새로고침하세요. 카카오톡 등 앱 내 브라우저라면 크롬으로 여세요.';
+  if(n==='NotFoundError'||n==='OverconstrainedError') return '사용할 수 있는 카메라를 찾지 못했습니다.';
+  if(n==='NotReadableError') return '다른 앱이 카메라를 쓰고 있습니다. 카메라 앱을 닫고 다시 시도하세요.';
+  return '카메라 오류: '+n+' '+(e?e.message:'');
+}
+async function startCam(){
+  if(!window.isSecureContext || !navigator.mediaDevices){ log(camHelp(),'err'); return; }
+  try{
+    stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:'environment',width:{ideal:1280},height:{ideal:1280}}});
+  }catch(e){
+    try{ stream=await navigator.mediaDevices.getUserMedia({video:true}); }  // 조건 완화해서 한 번 더
+    catch(e2){ log(camHelp(e2),'err'); return; }
+  }
+  v.srcObject=stream; await v.play();
+  $('camMsg').hidden=true; scanning=true;
+  $('btnCam').textContent='카메라 정지'; $('btnCam').classList.remove('primary');
+  $('status').textContent='스캔 중';
+  try{ wake=await navigator.wakeLock?.request('screen'); }catch(e){}
+  if('BarcodeDetector' in window){
+    try{ if((await BarcodeDetector.getSupportedFormats()).includes('qr_code')) detector=new BarcodeDetector({formats:['qr_code']}); }catch(e){}
+  }
+  loop();
+}
+function stopCam(){
+  scanning=false;
+  if(stream) stream.getTracks().forEach(t=>t.stop());
+  stream=null; $('camMsg').hidden=false; $('camMsg').textContent='카메라 꺼짐';
+  $('btnCam').textContent='카메라 시작';
+  if($('status').textContent!=='완료') $('status').textContent='대기';
+  try{ wake?.release(); }catch(e){} wake=null;
+}
+
+async function loop(){
+  if(!scanning) return;
+  if(v.readyState>=2){
+    let texts=[];
+    try{
+      // 가운데 정사각형만 잘라서 최대 800px로 축소 후 인식
+      const sq=Math.min(v.videoWidth,v.videoHeight);
+      texts=await decodeFrame(v,(v.videoWidth-sq)/2,(v.videoHeight-sq)/2,sq,sq,Math.min(sq,800));
+    }catch(e){}
+    let hit=false; for(const t of texts) if(handle(t)) hit=true;
+    if(texts.length){ $('frame').classList.add('hit'); clearTimeout(lastNew); lastNew=setTimeout(()=>$('frame').classList.remove('hit'),200); }
+  }
+  requestAnimationFrame(loop);
+}
+
+// ---- 동영상/사진 파일에서 읽기 ----
+async function getDetector(){
+  if(detector || !('BarcodeDetector' in window)) return detector;
+  try{ if((await BarcodeDetector.getSupportedFormats()).includes('qr_code')) detector=new BarcodeDetector({formats:['qr_code']}); }catch(e){}
+  return detector;
+}
+// 한 프레임 인식: 변형 QR(좌우·흑백 반전)을 되돌려서 먼저 읽고, 안 되면 일반 QR로 시도
+async function decodeOnce(cw,ch){
+  if(detector){ try{ return (await detector.detect(cv)).map(x=>x.rawValue); }catch(e){} }
+  if(!window.jsQR) return [];
+  const r=jsQR(ctx.getImageData(0,0,cw,ch).data,cw,ch,{inversionAttempts:'dontInvert'});
+  return r?[r.data]:[];
+}
+async function decodeFrame(src,sx,sy,sw,sh,maxSide){
+  await getDetector();
+  const k=Math.min(1,maxSide/Math.max(sw,sh)), cw=Math.round(sw*k), ch=Math.round(sh*k);
+  cv.width=cw; cv.height=ch;
+  // 1) 되돌리기: 좌우 반전해서 그린 뒤 (파랑-빨강) 차이로 흑백 생성
+  ctx.setTransform(-1,0,0,1,cw,0);
+  ctx.drawImage(src,sx,sy,sw,sh,0,0,cw,ch);
+  ctx.setTransform(1,0,0,1,0,0);
+  const d=ctx.getImageData(0,0,cw,ch), a=d.data;
+  for(let i=0;i<a.length;i+=4){
+    const g=Math.max(0,Math.min(255,128+(a[i+2]-a[i])));
+    a[i]=a[i+1]=a[i+2]=g;
+  }
+  ctx.putImageData(d,0,0);
+  let t=await decodeOnce(cw,ch);
+  if(t.length) return t;
+  // 2) 일반 QR
+  ctx.drawImage(src,sx,sy,sw,sh,0,0,cw,ch);
+  return decodeOnce(cw,ch);
+}
+async function decodeDrawable(src,w,h){ return decodeFrame(src,0,0,w,h,1000); }
+function seek(vid,t){ return new Promise(res=>{ vid.onseeked=()=>res(); vid.currentTime=t; }); }
+async function readVideo(file){
+  const vid=document.createElement('video');
+  vid.muted=true; vid.playsInline=true; vid.preload='auto';
+  vid.src=URL.createObjectURL(file);
+  await new Promise((res,rej)=>{ vid.onloadeddata=res; vid.onerror=()=>rej(new Error('이 동영상 형식을 열 수 없습니다')); });
+  const dur=vid.duration, step=0.1;
+  for(let t=0;t<dur;t+=step){
+    await seek(vid,t);
+    for(const x of await decodeDrawable(vid,vid.videoWidth,vid.videoHeight)) handle(x);
+    $('status').textContent='분석 '+Math.round(t/dur*100)+'%';
+    if(st.meta && Object.keys(st.parts).length===st.meta.total) break;
+  }
+  URL.revokeObjectURL(vid.src);
+}
+async function readImage(file){
+  const bmp=await createImageBitmap(file);
+  for(const x of await decodeDrawable(bmp,bmp.width,bmp.height)) handle(x);
+}
+$('pick').onchange=async e=>{
+  const files=[...e.target.files]; e.target.value='';
+  if(!files.length) return;
+  if(scanning) stopCam();
+  const before=Object.keys(st.parts).length;
+  for(const f of files){
+    try{ f.type.startsWith('video')?await readVideo(f):await readImage(f); }
+    catch(err){ log(f.name+': '+err.message,'err'); }
+  }
+  const got=Object.keys(st.parts).length;
+  if(!(st.meta && got===st.meta.total)){
+    $('status').textContent='대기';
+    log(got>before ? (got-before)+'개 새로 읽음. 남은 번호가 나오도록 한 번 더 촬영하세요.' : 'QR을 찾지 못했습니다. 화면을 더 크게, 흔들리지 않게 찍어보세요.', got>before?'ok':'err');
+  }
+};
+
+$('pwBox').onsubmit=e=>{ e.preventDefault(); const pw=$('pw').value; if(!pw) return;
+  log('해독 중…'); assemble(pw); };
+$('btnCam').onclick=()=> scanning?stopCam():startCam();
+$('btnSave').onclick=saveFile;
+$('btnShare').onclick=shareFile;
+let resetArmed=false;
+$('btnReset').onclick=()=>{
+  if(!resetArmed){ resetArmed=true; $('btnReset').textContent='한 번 더 누르면 초기화'; setTimeout(()=>{resetArmed=false;$('btnReset').textContent='초기화';},3000); return; }
+  resetArmed=false; $('btnReset').textContent='초기화';
+  st={meta:null,parts:{}}; fileBlob=null; save(); render();
+  $('btnSave').disabled=true; $('btnSave').classList.remove('primary'); $('btnShare').hidden=true; $('pwBox').hidden=true;
+  $('status').textContent='대기'; log('초기화했습니다.');
+};
+
+render();
+$('status').textContent='대기';
+if(st.meta){
+  log('이전 진행분을 이어서 받습니다.');
+  if(Object.keys(st.parts).length===st.meta.total) assemble();
+}
+</script>
+</body>
+</html>
